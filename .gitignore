@@ -5,5 +5,9 @@
 *.toc
 *.out
 *.cdr
+*.lop
+*.lpc
+*.gz
+.$*
 _*
 Диаг*
