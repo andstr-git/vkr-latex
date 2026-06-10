@@ -1,0 +1,1086 @@
+\section{Рабочий проект}
+
+В процессе разработки программно-информационной поисковой системы были реализованы два самостоятельных программных компонента: библиотека регулярных выражений на языке Си и поисковое приложение на C++ с использованием фреймворка Qt.
+
+\subsection{Библиотека регулярных выражений}
+
+\subsubsection{Состав библиотеки и условия применения}
+
+Библиотека регулярных выражений поставляется в виде двух файлов:
+\verb`regex-lib.c` -- реализация всех внутренних и экспортируемых
+функций, и \verb`regex-lib.h` -- заголовочный файл с объявлениями
+экспортируемых функций, непрозрачного типа \verb`struct re_chain`
+и перечисления кодов ошибок \verb`enum re_error_type`. Для подключения
+библиотеки к проекту достаточно добавить оба файла в систему сборки
+и включить заголовочный файл. В C++-проектах подключение выполняется
+без дополнительных настроек благодаря блоку \verb`extern "C"`
+в заголовочном файле.
+
+Библиотека протестирована на следующих платформах и компиляторах:
+\begin{itemize}
+	\item Windows~10/11, Clang~17;
+	\item Linux (Ubuntu~22.04), GCC~12;
+	\item онлайн-компиляторы на базе GCC и Clang (OnlineGDB и аналоги).
+\end{itemize}
+
+При компиляции не возникает предупреждений. Проверка санитайзерами
+адресов и неопределённого поведения (\verb`-fsanitize=address,undefined`)
+не выявила ошибок.
+
+\subsubsection{Сборка библиотеки}
+
+Для сборки библиотеки не требуется система автоматической сборки
+и сторонние зависимости -- достаточно компилятора, поддерживающего
+стандарт C99 или новее. Команды сборки представлены
+в таблице~\ref{tab:build_commands}.
+
+\begin{xltabular}{\textwidth}{|C{3.5cm}|T|}
+	\caption{Команды сборки библиотеки}
+	\label{tab:build_commands} \\
+	\hline
+	\thead{Режим} & \thead{Команда} \\
+	\hline
+	\finishhead
+	Отладочная сборка тестов & \verb`gcc -g -Wall -Wextra -fsanitize=address,undefined`
+	\verb`regex-tests.c -o regex-tests-dbg` \\
+	\hline
+	Оптимизированная сборка тестов & \verb`gcc -O2 regex-tests.c -o regex-tests` \\
+	\hline
+	Релизная сборка библиотеки & \verb`gcc -O2 -DNDEBUG -c regex-lib.c -o regex-lib.o` \verb`gcc program.c regex-lib.o -o program` \\
+\end{xltabular}
+
+Команды идентичны при использовании Clang: достаточно заменить
+\verb`gcc` на \verb`clang`. Тестовый файл \verb`regex-tests.c` включает
+реализацию библиотеки напрямую директивой \verb`#include "regex-lib.c"`,
+что позволяет собирать тесты единственной командой без раздельной
+компиляции. При интеграции библиотеки в сторонний проект рекомендуется
+раздельная компиляция.
+
+
+
+\subsubsection{Экспортируемые функции библиотеки}
+
+Библиотека предоставляет C API, объявленное в заголовочном файле \verb`regex-lib.h`. Все экспортируемые функции разделены на семейства по выполняемой операции. Для каждого семейства предоставляются две версии: принимающая строку шаблона и выполняющая его компиляцию при каждом вызове, и версия с префиксом \verb`obj_`, принимающая заранее скомпилированный объект типа \verb`struct re_chain*`. Использование \verb`obj_`-версий предпочтительно при многократном применении одного шаблона. 
+Помимо экспортируемых функций, заголовочный файл объявляет непрозрачный тип \verb`struct re_chain` и перечисление кодов ошибок \verb`enum re_error_type`, что позволяет потребителю API обрабатывать конкретные коды ошибок без доступа к внутренней реализации.
+
+Дополнительно в файле исходного кода библиотеки доступны две вспомогательные функции, не входящие в публичный API и предназначенные для отладки:
+\verb`print_re_blocks` -- форматированный вывод внутреннего представления скомпилированного регулярного выражения в консоль и
+\verb`get_error_msg` -- получение текстового описания кода ошибки на английском языке.
+\\
+
+\subsubsubsection{Компиляция шаблона регулярного выражения}
+
+Функции этого семейства выполняют разбор строки шаблона и построение внутреннего представления регулярного выражения, а также освобождение занимаемой им памяти. Аргументы функций приведены в таблицах~\ref{tab:api_compile} и~\ref{tab:api_free_re}.
+
+Возвращаемое значение функций компиляции~-- указатель на непрозрачный тип \verb`struct re_chain*`:
+\begin{enumerate}
+	\item Не-\verb`NULL` -- компиляция успешна, возвращен объект регулярного выражения.
+	\item \verb`NULL` -- ошибка в строке шаблона.
+\end{enumerate}
+
+Прототипы функций:
+\begin{enumerate}
+	\item \verb`struct re_chain* compile_re(char* pattern)`
+	\item \verb`struct re_chain* compile_re2(char* pattern, int* errcode, int* errpos)`
+\end{enumerate}
+
+\begin{xltabular}{\textwidth}{|C{3cm}|T|C{3cm}|}
+	\caption{Аргументы функций компиляции}
+	\label{tab:api_compile} \\
+	\hline
+	\thead{Аргумент} & \thead{Описание} & \thead{Допускается\\ NULL?} \\
+	\hline
+	\finishhead
+	\verb`char* pattern` & Строка шаблона регулярного выражения &  \\
+	\hline
+	\verb`int* errcode` (для \verb`compile_re2`) & Указатель для записи кода ошибки компиляции & Да \\
+	\hline
+	\verb`int* errpos` (для \verb`compile_re2`) & Указатель для записи позиции символа в шаблоне, при разборе которого обнаружена ошибка & Да \\
+	\hline
+\end{xltabular}
+
+Функция \verb`free_re` освобождает всю память, выделенную под объект регулярного выражения и все его внутренние структуры. Должна быть вызвана для каждого объекта, созданного функциями \verb`compile_re` или \verb`compile_re2`, после окончания его использования.
+Функция ничего не возвращает.
+
+Прототип функции:
+\begin{enumerate}
+	\item \verb`void free_re(struct re_chain* re_obj)`
+\end{enumerate}
+
+\begin{xltabular}{\textwidth}{|C{3cm}|T|C{3cm}|}
+	\caption{Аргументы функции освобождения памяти}
+	\label{tab:api_free_re} \\
+	\hline
+	\thead{Аргумент} & \thead{Описание} & \thead{Допускается\\ NULL?} \\
+	\hline
+	\finishhead
+	\verb`struct re_chain*` \verb`re_obj` & Указатель на скомпилированный объект регулярного выражения, память которого должна быть освобождена &  \\
+\end{xltabular}
+
+\subsubsubsection{Поиск позиции совпадения}
+
+Функции этого семейства находят первое совпадение шаблона в строке и возвращают его начальную позицию и длину. Аргументы функций приведены в таблице~\ref{tab:api_matchpos}.
+
+Возвращаемое значение -- целое число: 
+\begin{enumerate}
+	\item >= 0 -- захват успешен, его начальная позиция во входной строке.
+	\item -1 -- совпадений во входной строке не найдено.
+	\item < -1 -- ошибка в строке шаблона с возвращенным кодом.
+\end{enumerate}
+
+Прототипы функций:
+\begin{enumerate}
+	\item \verb`int matchpos(char* pattern, char* text, int* capture_data)`
+	\item \verb`int obj_matchpos(struct re_chain* re_obj, char* text, int* capture_data)`
+\end{enumerate}
+
+\begin{xltabular}{\textwidth}{|C{3cm}|T|C{3cm}|}
+	\caption{Аргументы функций поиска позиции совпадения}
+	\label{tab:api_matchpos} \\
+	\hline
+	\thead{Аргумент} & \thead{Описание} & \thead{Допускается\\ NULL?} \\
+	\hline
+	\finishhead
+	\verb`char* pattern` / \verb`struct re_chain*` \verb`re_obj` & Строка шаблона регулярного выражения / Откомпилированный объект регулярного выражения &  \\
+	\hline
+	\verb`char* text` & Входная строка для поиска & \\
+	\hline
+	\verb`int* capture_data` & Указатель на целое: при вызове -- начальная позиция поиска (если значение > 0); после вызова -- длина найденного совпадения или позиция ошибки & Да \\
+\end{xltabular}
+
+
+\subsubsubsection{Валидация строки}
+
+Функции этого семейства проверяют, содержит ли входная строка хотя бы одно совпадение с шаблоном, и возвращают булево значение. Аргументы функций приведены в таблице~\ref{tab:api_ismatch}.
+
+Возвращаемое значение -- целое число: 
+\begin{enumerate}
+	\item 1 -- входная строка удовлетворяет регулярному выражению.
+	\item 0 -- входная строка не подходит под регулярное выражение.
+	\item < -1 -- ошибка в строке шаблона с возвращенным кодом.
+\end{enumerate}
+
+Прототипы функций:
+\begin{enumerate}
+	\item \verb`int is_match(char* pattern, char* text)`
+	\item \verb`int obj_is_match(struct re_chain* re_obj, char* text)`
+\end{enumerate}
+
+\begin{xltabular}{\textwidth}{|C{3cm}|T|C{3cm}|}
+	\caption{Аргументы функций валидации строки}
+	\label{tab:api_ismatch} \\
+	\hline
+	\thead{Аргумент} & \thead{Описание} & \thead{Допускается\\ NULL?} \\
+	\hline
+	\finishhead
+	\verb`char* pattern` / \verb`struct re_chain*` \verb`re_obj` & Строка шаблона регулярного выражения / Скомпилированный объект регулярного выражения &  \\
+	\hline
+	\verb`char* text` & Входная строка для валидации &  \\
+\end{xltabular}
+
+\subsubsubsection{Извлечение одного совпадения с группами захвата}
+
+Функции этого семейства возвращают NULL-терминированный массив строк, содержащий полное совпадение и все захваченные группы, аналогично функции \verb`match()` в языке JavaScript. Аргументы функций приведены в таблице~\ref{tab:api_match}.
+
+Возвращаемое значение -- NULL-терминированный массив malloc-строк: 
+\begin{enumerate}
+	\item Указатель на указатель на строку -- захват успешен: первый элемент массива -- общий захват, последующие (пока не встретится указатель на NULL) -- группы захвата.
+	\item Указатель на указатель на NULL -- входная строка не подходит под регулярное выражение.
+	\item NULL -- ошибка в строке шаблона с возвращенным кодом.
+\end{enumerate}
+
+Прототипы функций:
+\begin{enumerate}
+	\item \verb`char** match(char* pattern, char* text)`
+	\item \verb`char** obj_match(struct re_chain* re_obj, char* text)`
+\end{enumerate}
+
+\begin{xltabular}{\textwidth}{|C{3cm}|T|C{3cm}|}
+	\caption{Аргументы функций извлечения одного совпадения}
+	\label{tab:api_match} \\
+	\hline
+	\thead{Аргумент} & \thead{Описание} & \thead{Допускается\\ NULL?} \\
+	\hline
+	\finishhead
+	\verb`char* pattern` / \verb`struct re_chain*` \verb`re_obj` & Строка шаблона регулярного выражения / Скомпилированный объект регулярного выражения &  \\
+	\hline
+	\verb`char* text` & Входная строка для поиска &  \\
+\end{xltabular}
+
+\subsubsubsection{Извлечение всех совпадений}
+
+Функции этого семейства возвращают NULL-терминированный массив строк, содержащий все непересекающиеся совпадения регулярного выражения во входной строке, аналогично функции \verb`match()` с флагом \verb`g` в языке JavaScript. Аргументы функций приведены в таблице~\ref{tab:api_matches}.
+
+Возвращаемое значение -- NULL-терминированный массив malloc-строк:
+\begin{enumerate}
+	\item Указатель на массив строк -- все найденные совпадения; если совпадений нет, первым элементом массива будет \verb`NULL`.
+	\item \verb`NULL` -- ошибка в строке шаблона.
+\end{enumerate}
+
+Прототипы функций:
+\begin{enumerate}
+	\item \verb`char** matches(char* pattern, char* text)`
+	\item \verb`char** obj_matches(struct re_chain* re_obj, char* text)`
+\end{enumerate}
+
+\begin{xltabular}{\textwidth}{|C{3cm}|T|C{3cm}|}
+	\caption{Аргументы функций извлечения всех совпадений}
+	\label{tab:api_matches} \\
+	\hline
+	\thead{Аргумент} & \thead{Описание} & \thead{Допускается\\ NULL?} \\
+	\hline
+	\finishhead
+	\verb`char* pattern` / \verb`struct re_chain*` \verb`re_obj` & Строка шаблона регулярного выражения / Скомпилированный объект регулярного выражения &  \\
+	\hline
+	\verb`char* text` & Входная строка для поиска &  \\
+\end{xltabular}
+
+\subsubsubsection{Замена совпадений в буфере фиксированного размера}
+
+Функции этого семейства выполняют замену совпадений шаблона на строку замены в предоставленном пользователем буфере фиксированного размера. Аргументы функций приведены в таблице~\ref{tab:api_nreplace}.
+
+Возвращаемое значение~-- целое число:
+\begin{enumerate}
+	\item $\ge 0$ -- число успешно выполненных замен.
+	\item $-1$ -- в буфере \verb`dest` закончилось место -- результат неполный.
+	\item $< -1$ -- ошибка в строке шаблона с возвращенным кодом.
+\end{enumerate}
+
+Прототипы функций:
+\begin{enumerate}
+	\item \verb`int re_nreplace(char* pattern, char* repl, char* text, char* dest, int n, int limit)`
+	\item \verb`int obj_re_nreplace(struct re_chain* re_obj, char* repl, char* text, char* dest,` \verb`int n, int limit)`
+\end{enumerate}
+
+\begin{xltabular}{\textwidth}{|C{3cm}|T|C{3cm}|}
+	\caption{Аргументы функций замены с фиксированным буфером}
+	\label{tab:api_nreplace} \\
+	\hline
+	\thead{Аргумент} & \thead{Описание} & \thead{Допускается\\ NULL?} \\
+	\hline
+	\finishhead
+	\verb`char* pattern` / \verb`struct re_chain*` \verb`re_obj` & Строка шаблона регулярного выражения / Скомпилированный объект регулярного выражения &  \\
+	\hline
+	\verb`char* repl` & Строка замены; может содержать ссылки на группы захвата вида \verb`$n` или \verb`\n` (где \textit{n} от 0 до 9) &  \\
+	\hline
+	\verb`char* text` & Исходная строка, в которой выполняется замена &  \\
+	\hline
+	\verb`char* dest` & Указатель на буфер для записи результата замены &  \\
+	\hline
+	\verb`int n` & Размер буфера \verb`dest` в байтах &  \\
+	\hline
+	\verb`int limit` & Максимальное число замен; 0~-- без ограничений &  \\
+\end{xltabular}
+
+\subsubsubsection{Замена совпадений с динамическим выделением памяти}
+
+Функции этого семейства выполняют замену совпадений шаблона на строку замены, автоматически выделяя результирующий буфер необходимого размера в динамической памяти. Аргументы функций приведены в таблице~\ref{tab:api_dupreplace}.
+
+Возвращаемое значение~-- указатель на \verb`malloc`-строку или \verb`NULL`:
+\begin{enumerate}
+	\item Не-\verb`NULL` -- указатель на строку с результатом замены (должна быть освобождена вызывающей стороной).
+	\item \verb`NULL` -- ошибка в строке шаблона (код ошибки при этом записывается по указателю \verb`repl_cnt`).
+\end{enumerate}
+
+Прототипы функций:
+\begin{enumerate}
+	\item \verb`char* re_dupreplace(char* pattern, char* repl, char* text, int limit, int* repl_cnt)`
+	\item \verb`char* obj_re_dupreplace(struct re_chain* re_obj, char* repl, char* text, int limit,` \verb`int* repl_cnt)`
+\end{enumerate}
+
+\begin{xltabular}{\textwidth}{|C{3cm}|T|C{3cm}|}
+	\caption{Аргументы функций замены с динамическим выделением памяти}
+	\label{tab:api_dupreplace} \\
+	\hline
+	\thead{Аргумент} & \thead{Описание} & \thead{Допускается\\ NULL?} \\
+	\hline
+	\finishhead
+	\verb`char* pattern` / \verb`struct re_chain*` \verb`re_obj` & Строка шаблона регулярного выражения / Скомпилированный объект регулярного выражения &  \\
+	\hline
+	\verb`char* repl` & Строка замены; может содержать ссылки на группы захвата вида \verb`$n` или \verb`\n` (где \textit{n} от 0 до 9) &  \\
+	\hline
+	\verb`char* text` & Исходная строка, в которой выполняется замена &  \\
+	\hline
+	\verb`int limit` & Максимальное число замен; 0 -- без ограничений &  \\
+	\hline
+	\verb`int* repl_cnt` & Указатель для записи числа выполненных замен или отрицательного кода ошибки & Да \\
+\end{xltabular}
+
+
+\subsubsection{Тестирование библиотеки регулярных выражений}
+
+Для верификации корректности библиотеки проведено модульное и интеграционное тестирование. Модульное тестирование охватывает каждое семейство экспортируемых функций в отдельности: тесты модулей \verb`check_correctness`, \verb`matchpos`, \verb`matchstart` проверяют функции компиляции и сопоставления изолированно. Интеграционное тестирование охватывает совместную работу нескольких компонентов: модуль \verb`is_match` проверяет цепочку «компиляция через \verb`compile_re2` -- сопоставление через \verb`obj_is_match`»; модули \verb`matcharr`, \verb`matches` и \verb`replace` проверяют полный конвейер «компиляция -- сопоставление -- извлечение подстрок / замена».
+
+В файле \verb`regex-tests.c` содержится встроенный набор автоматизированных тестов. Тестирование библиотеки выполняется в первых двух профилях сборки (отладочной и оптимизированной), описанных в таблице~\ref{tab:build_commands}.
+
+Профиль отладочной сборки используется для выявления ошибок работы с памятью и неопределённого поведения средствами санитайзеров AddressSanitizer и UndefinedBehaviorSanitizer. Время выполнения тестов в этом профиле не показательно из-за накладных расходов инструментации.
+
+Профиль оптимизированной сборки выполняет тестирование в условиях, приближённых к промышленной эксплуатации и включает в себя агрессивные оптимизации компилятора, которые могут проявить скрытое неопределённое поведение (UB), не видимое при отладочной сборке.
+
+В отладочном профиле вывод санитайзеров должен быть чистым -- любое
+сообщение от AddressSanitizer или UBSanitizer означает ошибку в реализации.
+В оптимизированном профиле дополнительно фиксируется время выполнения
+тест-сьюта, которое при сборке с \verb`-O2` составляет 0,022~с.
+
+Файл \verb`regex-tests.c` включает реализацию библиотеки директивой \verb`#include "regex-lib.c"`, что позволяет обойтись без раздельной компиляции при запуске тестов.
+
+Тесты организованы в модули с помощью макросов \verb`NEW_MODULE(name)` и \verb`FINISH_MODULE()`. Результат отдельного теста учитывается макросами \verb`TEST_OK(...)` и \verb`TEST_FAIL(...)`, фиксирующими успешное и неудачное прохождение теста соответственно. По завершении каждого модуля выводится число пройденных тестов. Тесты, помеченные макросом \verb`SPECIAL_TEST`, не учитываются в статистике -- они проверяют граничные случаи, поведение в которых не стандартизировано и различается среди промышленных библиотек регулярных выражений (PCRE, Go \verb`regexp`, Notepad++).
+
+Тест-сьют разделён на шесть модулей, описанных ниже.
+
+\paragraph{Модуль \texttt{check\_correctness}}
+
+Модуль проверяет корректность диагностики синтаксических ошибок в шаблонах регулярных выражений. Для каждого тестового шаблона функция \verb`assert_check_correctness` вызывает \verb`compile_re2` и сравнивает возвращённый код ошибки с эталонным значением из перечисления \verb`re_error_type`. В выводе для каждого теста указывается код ошибки, её текстовое описание и позиция ошибочного символа в шаблоне.
+
+Тесты охватывают все 16 кодов ошибок, определённых в библиотеке, включая корректные шаблоны (ожидаемый результат \verb`RE_OK`), а также условную компиляцию для режима \verb`STRICT_CHARCLASSES`, запрещающего экранирование букв, не используемых в символьных классах (например \verb`j`, \verb`q`). Всего в модуле 38 тестов.
+
+% Настройка листингов как рисунков (подпись снизу, сквозная нумерация с рисунками)
+\renewcommand{\lstlistingname}{Рисунок}
+\lstset{
+	captionpos=b,                    % подпись снизу
+	aboveskip=10pt,                  % отступ сверху (как у рисунков)
+	belowskip=0pt,
+%	belowcaptionskip=10pt  не работает
+}
+
+% Привязка счётчика листингов к разделу (как у рисунков в vkr)
+\makeatletter
+\@addtoreset{lstlisting}{section}
+\makeatother
+\renewcommand{\thelstlisting}{\thesection.\arabic{lstlisting}}
+
+\setcounter{lstlisting}{0}
+
+Результат выполнения модуля \verb`check_correctness` представлен на рисунке~\ref{fig:test_correctness}.
+
+\begin{lstlisting}[caption={Результат выполнения модуля check\_correctness}, label={fig:test_correctness}]
+	--- Module "check_correctness" ---
+	OK 0 "OK"
+	OK -100 "Unescaped ^ not in the beginning of regex or group" ('^' at 1)
+	OK -99 "Unescaped $ not in the end of regex" ('$' at 0)
+	OK -98 "Preceding token is not quantifiable" ('+' at 14)
+	OK -98 "Preceding token is not quantifiable" ('*' at 12)
+	OK -98 "Preceding token is not quantifiable" ('?' at 3)
+	OK -97 "Empty square brackets" (']' at 3)
+	OK -97 "Empty square brackets" (']' at 4)
+	OK -96 "Missing opening square bracket" (']' at 5)
+	OK -95 "Missing closing square bracket" ('' at 8)
+	OK -94 "Range with character class is inacceptable" ('-' at 3)
+	OK -94 "Range with character class is inacceptable" ('-' at 2)
+	OK 0 "OK"
+	OK -93 "Missing character after escape character" ('' at 4)
+	OK 0 "OK"
+	OK -100 "Unescaped ^ not in the beginning of regex or group" ('^' at 5)
+	OK 0 "OK"
+	OK 0 "OK"
+	OK 0 "OK"
+	OK 0 "OK"
+	OK -92 "Invalid characters inside curly brackets" ('a' at 8)
+	OK -92 "Invalid characters inside curly brackets" (',' at 7)
+	OK -91 "Quantifier range is out of order" ('}' at 7)
+	OK -90 "Quantifier range is too large" ('9' at 14)
+	OK 0 "OK"
+	OK 0 "OK"
+	OK -88 "Missing closing parenthesis" ('' at 3)
+	OK -89 "Missing opening parenthesis" (')' at 2)
+	OK 0 "OK"
+	OK -88 "Missing closing parenthesis" ('' at 15)
+	OK -89 "Missing opening parenthesis" (')' at 14)
+	OK 0 "OK"
+	OK -87 "Character range is out of order" ('y' at 8)
+	OK -85 "Invalid regex modifier" ('j' at 3)
+	OK -88 "Missing closing parenthesis" ('' at 4)
+	OK 0 "OK"
+	OK 0 "OK"
+	OK -86 "Invalid character class" ('j' at 2)
+	All module tests (38) passed
+\end{lstlisting}
+
+\paragraph{Модуль \texttt{matchpos}}
+
+Модуль проверяет весь основной синтаксис регулярных выражений на основе функции \verb`matchpos` -- поиска первого совпадения шаблона в строке. Функция \verb`assert_match` вызывает \verb`matchpos` с нулевой начальной позицией и сравнивает найденную подстроку с эталонной строкой. Для тестов, ожидающих отсутствие совпадений, эталонным значением является \verb`NULL`.
+
+Тесты охватывают следующие возможности библиотеки:
+\begin{itemize}
+	\item базовые метасимволы и квантификаторы (\verb`.`, \verb`*`, \verb`+`, \verb`?`, \verb`{n,m}`);
+	\item наборы символов (\verb`[...]`, \verb`[^...]`) и диапазоны;
+	\item якоря \verb`^` и \verb`$` в том числе в составе альтераций;
+	\item альтерацию с выбором наиболее раннего и наиболее длинного захвата;
+	\item группы захвата, незахватываемые группы \verb`(?:...)` и обратные ссылки \verb`\1`;
+	\item символьные классы \verb`\d`, \verb`\w`, \verb`\s`, \verb`\a`, \verb`\p` и их инверсии;
+	\item ленивые квантификаторы \verb`*?`, \verb`+?`, \verb`??`;
+	\item модификаторы \verb`(?s)`, \verb`(?m)`, \verb`(?i)`, \verb`(?I)` (в том числе регистронезависимый поиск с кириллицей в UTF-8);
+	\item работу с пустыми шаблонами и пустыми строками. 
+\end{itemize}
+
+Три теста помечены как особые (\verb`SPECIAL_TEST`): выбор между альтерациями с одинаковой начальной позицией и ленивый захват внутри групп. Всего в модуле 136 тестов, из которых 3 особых.
+
+Результат выполнения модуля \verb`matchpos` представлен на рисунке~\ref{fig:test_matchpos}.
+
+\begin{lstlisting}[caption={Результат выполнения модуля matchpos}, label={fig:test_matchpos}]
+	--- Module "matchpos" ---
+	OK "abc"
+	OK "dksst"
+	OK "bfd"
+	OK "a123bc9"
+	OK "heo"
+	OK NULL
+	OK "abcktrrr"
+	OK "b 4d_"
+	OK NULL
+	OK ""
+	OK ""
+	OK ""
+	OK ""
+	OK ""
+	OK NULL
+	OK "aaaabw"
+	OK "test   string 12"
+	OK "Helo"
+	OK "привет"
+	OK "at"
+	OK "[][q[w"
+	OK "aaabab"
+	OK "c"
+	OK "1111"
+	OK "aa"
+	OK ""
+	OK "aaaaa"
+	OK ""
+	OK "aaaa"
+	OK "aba"
+	OK NULL
+	OK "1234"
+	OK "3456"
+	OK NULL
+	OK ""
+	OK ""
+	OK "27:15"
+	OK "2:15"
+	OK "1:27"
+	OK NULL
+	OK "https://swsu.ru"
+	OK NULL
+	OK NULL
+	OK "http://www.swsu.ru"
+	OK "abc@af-af.de"
+	OK NULL
+	OK NULL
+	OK NULL
+	OK "f"
+	OK "wq"
+	OK NULL
+	OK NULL
+	OK "def"
+	OK "abc"
+	OK ""
+	OK "bddd"
+	OK "1st"
+	OK "stecond"
+	OK NULL
+	OK "ddd"
+	OK NULL
+	* OK "aabcc"
+	OK "abcd a1 asdd asd asad da"
+	OK "abcd a1 asdd asd asa"
+	OK "abcd a1 asdd asd asad das"
+	OK NULL
+	OK "abcdef"
+	OK "abcabc"
+	OK ""
+	OK "1abcabc"
+	OK "qabqwcdab"
+	OK "aaaaaaaa"
+	OK "aaaaaaaaaaaa"
+	OK "abcdet2b!end"
+	OK NULL
+	OK "abcdet2end"
+	OK "cd"
+	OK ""
+	OK ""
+	OK "https://www.youtube.com/"
+	OK "https://youtube-nocookie.com/"
+	OK "http://youtu.be/"
+	OK NULL
+	OK NULL
+	OK "https://i.ytimg.com/"
+	OK "abed"
+	OK NULL
+	OK "abc"
+	OK NULL
+	OK "134"
+	OK "1345"
+	OK "13445"
+	OK "124"
+	OK "abABC!"
+	OK "abAB\|_"
+	OK "abc45"
+	OK "abc_d1"
+	OK "ab#12$YZA"
+	OK "abc,        d!ef"
+	OK "a   b
+	"
+	OK "ba"
+	OK NULL
+	OK "ab"
+	OK "a"
+	OK "abcc"
+	OK "a"
+	OK ""witch" and her "broom""
+	OK ""witch""
+	OK "<p> <b> Wikipedia </b> encyclopedia. </p>"
+	OK "<p>"
+	OK "aa"
+	OK "aaa b"
+	OK "{FW}"
+	OK "869759002514931"
+	OK "3.1415926"
+	OK "y!y!"
+	OK NULL
+	OK "#y!y!"
+	OK NULL
+	OK "abab"
+	OK "abab"
+	OK "aa"
+	OK NULL
+	OK ""She's the one!""
+	OK "_'a b c' 'd e f' !"
+	* FAIL NULL != ""She's the one!""
+	* FAIL [] != ["  test s   ", "test s"]
+	OK "line1"
+	OK ".*?"
+	OK "line1
+	line2"
+	OK "b"
+	OK "b"
+	OK "bc"
+	OK "TEst"
+	OK "TEst"
+	OK "ATest"
+	OK "поддержка"
+	OK "поддержка"
+	OK "Тестовый поиск"
+	All module tests (136) passed
+\end{lstlisting}
+
+\paragraph{Модуль \texttt{matchstart}}
+
+Модуль проверяет корректность поиска с заданной начальной позицией -- передачи положительного значения по указателю \verb`capture_data` при вызове \verb`matchpos`. Функция \verb`assert_matchstart` принимает дополнительный параметр \verb`start_pos` и вызывает \verb`matchpos` с этим значением.
+
+Тесты проверяют: поиск с ненулевой позиции, взаимодействие начальной позиции с якорем \verb`^` (поиск не должен находить совпадение, если якорь не применим с заданной позиции), а также поиск с позицией, выходящей за пределы строки. Всего 4 теста.
+
+Результат выполнения модуля \verb`matchstart` представлен на рисунке ~\ref{fig:test_matchstart}.
+\\
+
+\begin{lstlisting}[caption={Результат выполнения модуля matchstart}, label={fig:test_matchstart}]
+	--- Module "matchstart" ---
+	OK " b"
+	OK "</b>"
+	OK NULL
+	OK NULL
+	All module tests (4) passed
+\end{lstlisting}
+
+\paragraph{Модуль \texttt{is\_match}}
+
+Модуль проверяет корректность функции \verb`obj_is_match` -- валидации строки на соответствие шаблону. Функция \verb`assert_is_match` для каждого теста компилирует шаблон через \verb`compile_re2`, вызывает \verb`obj_is_match` и сравнивает булев результат с эталонным. Использование \verb`obj_`-версии дополнительно проверяет корректность работы с предварительно скомпилированным объектом.
+
+Тесты охватывают: базовое совпадение и его отсутствие, якоря в составе групп, а также практический шаблон проверки на простоту чисел в унарной системе счисления \verb`^1?$|^(11+)\1+$` от 1 до 17, и шаблон валидации адреса электронной почты, используемый в поле HTML \verb`<input type="email">`. Всего 20 тестов.
+
+Результат выполнения модуля \verb`is_match` представлен на рисунке~\ref{fig:test_ismatch}.
+
+\begin{lstlisting}[caption={Результат выполнения модуля ismatch}, label={fig:test_ismatch}]
+	--- Module "is_match" ---
+	OK true
+	OK false
+	OK true
+	OK false
+	OK true
+	OK false
+	OK true
+	OK true
+	OK true
+	OK true
+	OK true
+	OK false
+	OK true
+	OK false
+	OK true
+	OK false
+	OK true
+	OK false
+	OK true
+	OK false
+	All module tests (20) passed
+\end{lstlisting}
+
+\paragraph{Модуль \texttt{matcharr}}
+
+Модуль проверяет корректность функций \verb`match` и \verb`matches` через функции-обёртки \verb`assert_matcharr` и \verb`assert_matches` соответственно. Обе функции сравнивают возвращённый NULL-терминированный массив строк с эталонным массивом, переданным через вариадический макрос \verb`ARR(...)`.
+
+Тесты функции \verb`match` проверяют: возврат полного совпадения без групп, возврат групп захвата при простых и вложенных группах, незахватываемые группы \verb`(?:...)`, взаимодействие групп с квантификаторами, а также сложный вложенный шаблон с несколькими уровнями альтераций. Всего 14 тестов.
+
+Результат выполнения модуля \verb`matcharr` представлен на рисунке~\ref{fig:test_matcharr}.
+
+\begin{lstlisting}[caption={Результат выполнения модуля matcharr}, label={fig:test_matcharr}]
+	--- Module "matcharr" ---
+	OK ["x"]
+	OK ["x", "x"]
+	OK ["abcdef", "abc", "def"]
+	OK ["abcdef", "def"]
+	OK ["abcdef", "abc"]
+	OK ["aaaaaaaa", "aaaa", "aa"]
+	OK ["aaaaaaaa", "aaaaaaaa", "aaaa", "aa"]
+	OK ["cd"]
+	OK ["efcd", "cd"]
+	OK ["abcdet2b!end", "cdet2b!", "t2b!", "t2", "b!"]
+	OK ["bXcX", "c"]
+	OK ["aaa,b,c,d", "c,"]
+	OK ["word d e word", "word"]
+	OK ["nonnoncapturinggroups"]
+	All module tests (14) passed
+\end{lstlisting}
+
+\paragraph{Модуль \texttt{matches}}
+
+Тесты функции \verb`matches` проверяют: извлечение всех символов строки, поведение якорей \verb`^` и \verb`$` при глобальном поиске, обработку пустых совпадений (шаблоны \verb`.?` и \verb`.??`), поиск нескольких адресов электронной почты в тексте, и многострочный режим \verb`(?m)` с якорем \verb`$`. Всего 10 тестов.
+
+Результат выполнения модуля \verb`matches` представлен на рисунке~\ref{fig:test_matches}.
+
+\begin{lstlisting}[caption={Результат выполнения модуля matches}, label={fig:test_matches}]
+	--- Module "matches" ---
+	OK ["a", "b", "c"]
+	OK ["a"]
+	OK ["bc"]
+	OK []
+	OK ["a", "b", "c", ""]
+	OK ["", "", "", ""]
+	OK ["abc@d.ef", "fb@swsu.ru"]
+	OK ["<three>", "<cool>", "<words>"]
+	OK [""]
+	OK ["", "", "", ""]
+	All module tests (10) passed
+\end{lstlisting}
+
+\paragraph{Модуль \texttt{replace}}
+
+Модуль проверяет корректность функции \verb`re_nreplace` -- замены совпадений в буфере фиксированного размера. Функция \verb`assert_re_nreplace` сравнивает содержимое буфера с эталонной строкой и число выполненных замен с эталонным счётчиком. При \verb`ref_cnt = -1` число замен не проверяется (используется для особых тестов).
+
+Тесты проверяют: удаление символов (пустая строка замены), замену с ограничением числа итераций, использование обратных ссылок \verb`$0`--\verb`$9` и \verb`\n` в строке замены, многострочный режим с якорями \verb`^` и \verb`$`, экранирование метасимволов через замену, и практический сценарий удаления висячих пробелов из кода без нарушения отступов. Два теста помечены как особые (\verb`SPECIAL_TEST`) -- замена на символ при нулевом захвате. Всего 15 тестов.
+
+Результат выполнения модуля \verb`replace` представлен на рисунке~\ref{fig:test_replace}.
+
+\begin{lstlisting}[caption={Результат выполнения модуля replace}, label={fig:test_replace}]
+	--- Module "replace" ---
+	OK "abc", repl_cnt = 5
+	OK "ab c&", repl_cnt = 3
+	OK "abc", repl_cnt = 3
+	OK "Wikipedia encyclopedia. ", repl_cnt = 4
+	OK "abc_def__bla_bla", repl_cnt = 4
+	OK "abc_def_bla_bla", repl_cnt = 3
+	OK "def", repl_cnt = 1
+	OK "{
+		int a = 0;
+		
+		char b = 'a';
+		
+	}", repl_cnt = 3
+	OK "nums: 10, 200, 1040...", repl_cnt = 3
+	OK "_-t2b!      b!-", repl_cnt = 1
+	OK "li\^te\(r\)al \[match\]\!", repl_cnt = 6
+	OK "//a = 1;
+	//b = 2;
+	//", repl_cnt = 3
+	OK "a = 1;", repl_cnt = 1
+	OK "a = 1;
+	b = 2;
+	c = 3;", repl_cnt = 3
+	OK "cd
+	aa
+	//", repl_cnt = 1
+	* OK ".t.e.s.t.", repl_cnt = 5
+	* OK ".b..c.", repl_cnt = 4
+	All module tests (15) passed
+\end{lstlisting}
+
+\paragraph{Итоги тестирования}
+
+Итоговая статистика тест-сьюта приведена на рисунке~\ref{fig:test_summary}. Все 237 учитываемых тестов успешно пройдены; 5 особых тестов также дают ожидаемый результат. Суммарное время выполнения составляет 0,022~с.
+
+\begin{lstlisting}[caption={Результат тестирования библиотеки}, label={fig:test_summary}]
+
+-----------------------
+All tests (237) passed, elapsed time: 0.022 s
+\end{lstlisting}
+
+\subsection{Поисковое приложение}
+
+\subsubsection{Описание классов приложения}
+
+\subsubsubsection{Класс \texttt{TextEditor}}
+
+Класс \verb`TextEditor` является главным окном приложения и наследует \verb`QMainWindow`. Методы класса приведены в таблице~\ref{tab:rp_texteditor_methods}.
+
+\begin{xltabular}{\textwidth}{|C{6cm}|T|}
+	\caption{Методы класса \texttt{TextEditor}}
+	\label{tab:rp_texteditor_methods} \\
+	\hline
+	\thead{Метод} & \thead{Описание} \\
+	\hline
+	\finishhead
+	\verb`openFile(path)` & Открывает файл по заданному пути: читает содержимое, определяет тип переноса строк, конвертирует CP1251 в UTF-8 при необходимости, отображает в редакторе \\
+	\hline
+	\verb`saveToFile(path)` & Сохраняет текст редактора в файл с восстановлением оригинального типа переноса строк (\verb`LF`/\verb`CR`/\verb`CRLF`) \\
+	\hline
+	\verb`setTabWidth(spaces)` & Устанавливает визуальную ширину табуляции в заданное число пробелов \\
+	\hline
+	\verb`setZoom(percent)` & Устанавливает масштаб отображения текста; размер шрифта привязывается к ближайшему стандартному значению из списка \verb`ZOOM_SIZES` \\
+	\hline
+	\verb`detectLineEnding(raw)` & Определяет тип переноса строк в текстовом файле: \verb`CRLF`, \verb`CR` или \verb`LF` \\
+	\hline
+	\verb`on_action_open_triggered()` & Открывает диалог выбора файла; отклоняет двоичные файлы с сообщением об ошибке \\
+	\hline
+	\verb`on_action_save_triggered()` & Сохраняет файл по текущему пути; при отсутствии пути (новый файл) вызывает «Сохранить как» \\
+	\hline
+	\verb`on_action_save_as_triggered()` & Открывает диалог сохранения файла \\
+	\hline
+	\verb`on_action_find_triggered()` & Показывает диалоговое окно поиска; позиционирует его справа от главного окна или по центру экрана при нехватке места \\
+	\hline
+	\verb`on_action_search_dir_triggered()` & Открывает диалог выбора директории и запускает \verb`SearchDir` \\
+	\hline
+	\verb`on_action_zoom_` \verb`in` / \verb`out` / \verb`100` \verb`_triggered()` & Управление масштабом отображения текста в редакторе \\
+	\hline
+	\verb`onCursorPositionChanged()` & Обновляет индикатор строки и столбца в строке состояния \\
+	\hline
+	\verb`eventFilter(obj, event)` & Перехватывает \verb`Ctrl+Колёсико` для масштабирования \\
+\end{xltabular}
+
+\subsubsubsection{Класс \texttt{SearchDialog}}
+
+Класс \verb`SearchDialog` наследует \verb`QDialog` и реализует немодальный диалог поиска и замены. Методы класса приведены в таблице~\ref{tab:rp_searchdialog_methods}.
+
+\begin{xltabular}{\textwidth}{|C{5cm}|T|}
+	\caption{Методы класса \texttt{SearchDialog}}
+	\label{tab:rp_searchdialog_methods} \\
+	\hline
+	\thead{Метод} & \thead{Описание} \\
+	\hline
+	\finishhead
+	\verb`buildPattern()` & Формирует строку шаблона регулярного выражения: добавляет в неё префикс модификаторов \verb`(?Ims)` на основе состояния чекбоксов учёта регистра, многострочного режима и <<\verb`.`>> включает новую строку \\
+	\hline
+	\verb`buildFindFlags()` & Формирует флаги \verb`QTextDocument::FindFlags` для обычного режима поиска \\
+	\hline
+	\verb`getSearchScope(text, offset)` & Определяет область поиска: весь текст или только выделенный участок; заполняет \verb`search_text` и \verb`scope_utf8_offset` \\
+	\hline
+	\verb`validatePattern()` & Компилирует шаблон через \verb`compile_re2`; при ошибке отображает форматированное сообщение с выделением позиции ошибки \\
+	\hline
+	\verb`collectMatches` \verb`(pattern, text, offset)` & Итеративно вызывает \verb`matchpos` и заполняет список \verb`found_matches` всеми совпадениями в области поиска \\
+	\hline
+	\verb`highlightAll()` & Формирует список \verb`QTextEdit::ExtraSelection` из \verb`found_matches` и передаёт в \verb`setExtraSelections` \\
+	\hline
+	\verb`clearHighlights()` & Сбрасывает список совпадений и снимает подсветку \\
+	\hline
+	\verb`findNext_regex(wrap)` & Поиск следующего совпадения по регулярному выражению с возможным циклическим переходом; переводит курсор редактора на найденное совпадение \\
+	\hline
+	\verb`findNext_normal(wrap)` & Поиск следующего совпадения в обычном режиме через \verb`QTextDocument::find` с учётом области поиска \\
+	\hline
+	\verb`utf8ToQcharPos(utf8, pos)` & Конвертирует байтовое смещение UTF-8 в позицию символа Qt \\
+	\hline
+	\verb`showStatus(html)` / \verb`clearStatus()` & Показывает/скрывает строку состояния в диалоге \\
+	\hline
+	\verb`on_btn_find_next_clicked()` & Выполняет поиск следующего совпадения \\
+	\hline
+	\verb`on_btn_count_clicked()` & Подсчитывает число совпадений и отображает в строке состояния \\
+	\hline
+	\verb`on_btn_replace_clicked()` & Заменяет текущее выделенное совпадение через \verb`re_dupreplace` с \verb`limit=1` \\
+	\hline
+	\verb`on_btn_replace_all` \verb`_highlight_clicked()` & В режиме замены -- заменяет все совпадения; в режиме поиска -- подсвечивает в тексте все совпадения \\
+	\hline
+	\verb`on_btn_toggle_replace` \verb`_clicked()` & Переключает видимость панели замены; меняет текст кнопки-переключателя \\
+\end{xltabular}
+
+\subsubsubsection{Класс \texttt{SearchDir}}
+
+Класс \verb`SearchDir` наследует \verb`QDialog` и реализует диалоговое окно рекурсивного многопоточного поиска по файлам выбранной директории. Методы класса приведены в таблице~\ref{tab:rp_searchdir_methods}.
+
+\begin{xltabular}{\textwidth}{|C{5cm}|T|}
+	\caption{Методы класса \texttt{SearchDir}}
+	\label{tab:rp_searchdir_methods} \\
+	\hline
+	\thead{Метод} & \thead{Описание} \\
+	\hline
+	\finishhead
+	\verb`startSearch()` & Компилирует шаблон, формирует список фильтров расширений, создаёт \verb`QThread` и \verb`SearchController`, соединяет сигналы и запускает поток \\
+	\hline
+	\verb`stopSearch()` & Устанавливает флаг остановки в \verb`SearchController` через \verb`requestStop()` \\
+	\hline
+	\verb`cleanupThread()` & Завершает и удаляет рабочий поток после окончания поиска \\
+	\hline
+	\verb`onMatchFound(result)` & Добавляет дочерний узел совпадения в дерево результатов; при необходимости создаёт родительский узел файла \\
+	\hline
+	\verb`onFileProcessed` \verb`(processed, total)` & Обновляет прогресс-бар \\
+	\hline
+	\verb`onSearchFinished` \verb`(files, matches, stopped)` & Скрывает прогресс-бар, обновляет счётчики в узлах файлов, отображает итоговый статус \\
+	\hline
+	\verb`onTreeItemDoubleClicked` \verb`(item, col)` & Открывает файл в редакторе через \verb`TextEditor::openFile` и переводит курсор на строку совпадения \\
+\end{xltabular}
+
+\subsubsubsection{Классы \texttt{SearchController} и \texttt{FileSearchWorker}}
+
+Класс \verb`SearchController` наследует \verb`QObject` и выполняется в отдельном потоке. Он обходит директорию через \verb`QDirIterator` и создаёт объекты \verb`FileSearchWorker` -- по одному на каждый файл. Воркеры помещаются в локальный \verb`QThreadPool`; при многопоточном режиме (\verb`chk_multithread`) пул использует все доступные ядра процессора, при однопоточном -- одно. Методы классов приведены в таблице~\ref{tab:rp_worker_methods}.
+
+\begin{xltabular}{\textwidth}{|C{5cm}|T|}
+	\caption{Методы классов \texttt{SearchController} и \texttt{FileSearchWorker}}
+	\label{tab:rp_worker_methods} \\
+	\hline
+	\thead{Метод} & \thead{Описание} \\
+	\hline
+	\finishhead
+	\verb`SearchController::setup(...)` & Инициализирует параметры поиска: директорию, фильтры по расширениям, флаги режима поиска, скомпилированный объект регулярного выражения \\
+	\hline
+	\verb`SearchController::run()` & Вычисляет суммарный размер файлов, обходит директорию, создаёт и запускает воркеры, ожидает их завершения через \verb`QEventLoop` \\
+	\hline
+	\verb`SearchController` \verb`::requestStop()` & Устанавливает атомарный флаг остановки \verb`stop_flag` \\
+	\hline
+	\verb`FileSearchWorker::run()` & Читает файл, проверяет на двоичность по наличию нулевых байтов в его первых 8~КБ, конвертирует CP1251 в UTF-8, итеративно ищет совпадения и испускает сигнал \verb`matchFound` для каждого \\
+	\hline
+	\verb`FileSearchWorker` \verb`::isBinary(data)` & Проверяет буфер на наличие нулевых байтов \\
+	\hline
+	\verb`FileSearchWorker` \verb`::extractContext(...)` & Извлекает фрагмент текста вокруг совпадения для отображения в дереве результатов \\
+\end{xltabular}
+
+\subsubsection{Тестирование поискового приложения}
+
+Тестирование поискового приложения проводится вручную по сценариям, охватывающим позитивные, негативные и граничные случаи. Для каждого сценария приведены входные данные, ожидаемый результат и скриншот с результатом.
+
+\subsubsubsection{Сценарий 1. Открытие текстового файла}
+
+Входные данные: текстовый файл в кодировке UTF-8 с содержимым:
+
+\begin{lstlisting}[language={}]
+	Строка первая
+	Строка вторая
+	Строка третья
+\end{lstlisting}
+
+Ожидаемый результат: файл открывается, содержимое отображается в редакторе, в строке состояния показаны «Стр: 1  Стб: 1», тип переноса строк «LF» и масштаб «100\%», заголовок окна содержит имя файла.
+
+Результат тестирования представлен на рисунке~\ref{fig:test_app_open}.
+
+\begin{figure}[H]
+	\centering
+	\includegraphics[width=0.95\linewidth]{test1.png}
+	\caption{Открытие текстового файла}
+	\label{fig:test_app_open}      
+\end{figure}
+
+\subsubsubsection{Сценарий 2. Открытие файла в кодировке CP1251}
+
+Входные данные: файл \verb`.txt` в кодировке Windows-1251 с кириллическим текстом.
+
+Ожидаемый результат: кириллица отображается корректно (автоматическая конвертация в UTF-8); в строке состояния отображается тип переноса строк (CRLF).
+
+Результат тестирования представлен на рисунке~\ref{fig:test_app_cp1251}.
+
+\begin{figure}[H]
+	\centering
+	\includegraphics[width=0.95\linewidth]{test2.png}
+	\caption{Открытие файла в кодировке CP1251}
+	\label{fig:test_app_cp1251}      
+\end{figure}
+
+\subsubsubsection{Сценарий 3. Попытка открытия двоичного файла}
+
+Входные данные: двоичный файл (например, \verb`.exe`, \verb`.png` или \verb`.bin`).
+
+Ожидаемый результат: появляется диалог с сообщением «Файл является двоичным и не может быть открыт в текстовом редакторе»; содержимое редактора не изменяется.
+
+Результат тестирования представлен на рисунке~\ref{fig:test_app_binary}.
+
+\begin{figure}[H]
+	\centering
+	\includegraphics[width=0.95\linewidth]{test3.png}
+	\caption{Попытка открытия двоичного файла}
+	\label{fig:test_app_binary}      
+\end{figure}
+
+\subsubsubsection{Сценарий 4. Поиск по регулярному выражению с подсветкой}
+
+Входные данные: открытый файл со следующим содержимым:
+
+\begin{lstlisting}[language={}]
+	email: user@example.com
+	phone: +79161234567
+	email: admin@test.org
+\end{lstlisting}
+
+Шаблон: \verb`[\w.+-]+@[\w-]+\.[\w.]+`, режим -- регулярное выражение, нажата кнопка «Подсветить».
+
+Ожидаемый результат: оба адреса электронной почты подсвечены; в строке состояния отображается «Всего 2 совпадений в файле».
+
+Результат тестирования представлен на рисунке~\ref{fig:test_app_highlight}.
+
+\begin{figure}[H]
+	\centering
+	\includegraphics[width=0.95\linewidth]{test4.png}
+	\caption{Поиск по регулярному выражению с подсветкой}
+	\label{fig:test_app_highlight}      
+\end{figure}
+
+\subsubsubsection{Сценарий 5. Поиск с некорректным шаблоном}
+
+Входные данные: шаблон \verb`.[\w-z]`, режим -- регулярное выражение.
+
+Ожидаемый результат: в строке состояния диалога отображается сообщение об ошибке красным цветом с подчёркиванием символа, вызвавшего ошибку (дефис, обозначающий диапазон символов в наборе символов); поиск не выполняется.
+
+Результат тестирования представлен на рисунке~\ref{fig:test_app_error}.
+
+\begin{figure}[H]
+	\centering
+	\includegraphics[width=0.7\linewidth]{test5.png}
+	\caption{Попытка поиска с некорректным шаблоном}
+	\label{fig:test_app_error}      
+\end{figure}
+
+\subsubsubsection{Сценарий 6. Некорректный шаблон с ошибкой в недостающем символе}
+
+Входные данные: шаблон \verb`(abc` с ошибкой в недостающем символе (после текста шаблона), режим -- регулярное выражение.
+
+Ожидаемый результат: в строке состояния диалога отображается сообщение об ошибке красным цветом с подчёркиванием места возникновения ошибки (нуль-терминатор шаблона -- отсутствует закрывающая скобка); поиск не выполняется.
+
+Результат тестирования представлен на рисунке~\ref{fig:test_app_error_edge}.
+
+\begin{figure}[H]
+	\centering
+	\includegraphics[width=0.7\linewidth]{test6.png}
+	\caption{Шаблон с ошибкой в недостающем символе}
+	\label{fig:test_app_error_edge}      
+\end{figure}
+
+\subsubsubsection{Сценарий 7. Замена всех совпадений с обратными ссылками}
+
+Входные данные: открыт файл:
+\\
+
+\begin{lstlisting}[language={}]
+	Дата: 15.03.2023
+	Срок: 31.12.2025
+\end{lstlisting}
+
+Шаблон: \verb`(\d{2})\.(\d{2})\.(\d{4})`, строка замены: \verb`$3-$2-$1`, нажата кнопка «Заменить всё».
+
+Ожидаемый результат: содержимое редактора принимает вид:
+
+\begin{lstlisting}[language={}]
+	Дата: 2023-03-15
+	Срок: 2025-12-31
+\end{lstlisting}
+
+В строке состояния отображается «Выполнено 2 замен».
+
+Результат тестирования представлен на рисунке~\ref{fig:test_app_replace}.
+
+\begin{figure}[H]
+	\centering
+	\includegraphics[width=0.95\linewidth]{test7.png}
+	\caption{Содержимое редактора после выполнения замены}
+	\label{fig:test_app_replace}      
+\end{figure}
+
+\subsubsubsection{Сценарий 8. Поиск с циклическим переходом}
+
+Входные данные: файл с несколькими совпадениями, курсор на последнем совпадении, включена галочка «Зациклить поиск».
+
+Ожидаемый результат: при нажатии «Найти далее» поиск переходит к первому совпадению; в строке состояния отображается «Достигнут конец, поиск продолжен с начала файла».
+
+Результат тестирования представлен на рисунке~\ref{fig:test_app_wrap}.
+
+\begin{figure}[H]
+	\centering
+	\includegraphics[width=0.95\linewidth]{test8.png}
+	\caption{Выделение после циклического перехода}
+	\label{fig:test_app_wrap}      
+\end{figure}
+
+\subsubsubsection{Сценарий 9. Поиск в выделенной области}
+
+Входные данные: выделен фрагмент текста, включена галочка «Только в выделении», задан шаблон.
+
+Ожидаемый результат: подсветка и подсчёт совпадений выполняются только внутри выделенного фрагмента; символы за пределами выделения не затрагиваются.
+
+Результат тестирования представлен на рисунке~\ref{fig:test_app_scope}.
+
+\begin{figure}[H]
+	\centering
+	\includegraphics[width=0.95\linewidth]{test9.png}
+	\caption{Поиск в выделении}
+	\label{fig:test_app_scope}      
+\end{figure}
+
+\subsubsubsection{Сценарий 10. Рекурсивный поиск по директории}
+
+Входные данные: директория с файлами:
+
+\begin{lstlisting}[language={}]
+	file1.txt  (содержит "TODO: fix bug")
+	subdir/file2.cpp  (содержит "TODO: refactor")
+	subdir/image.png  (двоичный файл)
+\end{lstlisting}
+
+Шаблон: \verb`TODO:.*`, фильтр по расширениям: \verb`*`, рекурсивный режим включён.
+
+Ожидаемый результат: в дереве результатов отображаются два файла с одним совпадением каждый; файл \verb`image.png` пропущен как двоичный; при двойном щелчке на совпадении файл открывается в редакторе с переходом на нужную строку.
+
+Результат тестирования представлен на рисунке~\ref{fig:test_app_searchdir}.
+
+\begin{figure}[H]
+	\centering
+	\includegraphics[width=0.95\linewidth]{test10.png}
+	\caption{Результаты рекурсивного поиска}
+	\label{fig:test_app_searchdir}      
+\end{figure}
+
+\subsubsubsection{Сценарий 11. Прерывание поиска по директории}
+
+Входные данные: директория с большим числом файлов (более 1000), поиск запущен.
+
+Ожидаемый результат: при нажатии кнопки «Прервать поиск» поиск останавливается; кнопка возвращается в состояние «Найти»; в строке состояния отображается «Поиск прерван»; уже найденные результаты остаются в дереве.
+
+Результат тестирования представлен на рисунке~\ref{fig:test_app_stop}.
+
+\begin{figure}[H]
+	\centering
+	\includegraphics[width=0.95\linewidth]{test11.png}
+	\caption{Прерывание поиска по директории}
+	\label{fig:test_app_stop}      
+\end{figure}
+
+\subsubsubsection{Сценарий 12. Граничный случай: совпадение нулевой длины}
+
+Входные данные: шаблон соответствует захвату нулевой длины (например, \verb`.??`).
+
+Ожидаемый результат: в строке состояния отображается «Совпадение нулевой длины -- выделен ближайший символ»; ошибок не возникает.
+
+Результат тестирования представлен на рисунке~\ref{fig:empty_capture}.
+
+\begin{figure}[H]
+	\centering
+	\includegraphics[width=0.95\linewidth]{test12.png}
+	\caption{Обработка совпадения нулевой длины}
+	\label{fig:empty_capture}      
+\end{figure}
+
+\subsubsubsection{Сценарий 13. Граничный случай: шаблон совпадает со всем текстом}
+
+Входные данные: шаблон \verb`(?s).+` применяется к многострочному тексту, "<Многострочный режим"> отключён, режим "<\textquotedbl .\textquotedbl \ -- новая строка"> включается через модификатор в составе строки шаблона.
+
+Ожидаемый результат: всё содержимое редактора подсвечивается как одно совпадение; подсчёт возвращает 1.
+
+Результат тестирования представлен на рисунке~\ref{fig:test_app_dotall}.
+
+\begin{figure}[H]
+	\centering
+	\includegraphics[width=0.95\linewidth]{test13.png}
+	\caption{Обработка шаблона, захватывающего весь многострочный текст}
+	\label{fig:test_app_dotall}      
+\end{figure}

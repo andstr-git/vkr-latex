@@ -1,0 +1,36 @@
+\appendix{Представление графического материала}
+
+Графический материал, выполненный на отдельных листах,
+изображен на рисунках А.1--А.\arabic{числоПлакатов}.
+\setcounter{числоПлакатов}{0}
+
+\renewcommand{\thefigure}{А.\arabic{figure}} % шаблон номера для плакатов
+
+\begin{landscape}
+
+\begin{плакат}
+    \includegraphics[width=0.82\linewidth]{Плакат1.eps}
+    \заголовок{Сведения о ВКРБ}
+    \label{pl1:image}      
+\end{плакат}
+
+\begin{плакат}
+    \includegraphics[width=0.82\linewidth]{Плакат2.eps}
+    \заголовок{Цель и задачи разработки}
+    \label{pl2:image}      
+\end{плакат}
+
+\begin{плакат}
+	\includegraphics[width=0.82\linewidth]{Плакат3.eps}
+	\заголовок{Синтаксис регулярных выражений}
+	\label{pl3:image}      
+\end{плакат}
+
+%
+%\begin{плакат}
+%    \includegraphics[width=0.82\linewidth]{плакат3.png}
+%    \заголовок{Еще плакат}
+%    \label{pl4:image}      
+%\end{плакат}
+
+\end{landscape}
